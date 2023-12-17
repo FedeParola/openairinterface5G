@@ -191,11 +191,12 @@ static int allocCirBuf(rfsimulator_state_t *bridge, int sock)
   ptr->trashingPacket=false;
   ptr->transferPtr=(char *)&ptr->th;
   ptr->remainToTransfer=sizeof(samplesBlockHeader_t);
-  int sendbuff = SEND_BUFF_SIZE;
-  if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sendbuff, sizeof(sendbuff)) != 0) {
-    LOG_E(HW, "setsockopt(SO_SNDBUF) failed\n");
-    return -1;
-  }
+  /* Socket option not supported by lwip */
+  // int sendbuff = SEND_BUFF_SIZE;
+  // if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sendbuff, sizeof(sendbuff)) != 0) {
+  //   LOG_E(HW, "setsockopt(SO_SNDBUF) failed\n");
+  //   return -1;
+  // }
   struct epoll_event ev= {0};
   ev.events = EPOLLIN | EPOLLRDHUP;
   ev.data.fd = sock;
@@ -602,39 +603,40 @@ static int rfsimu_vtime_cmd(char *buff, int debug, telnet_printfunc_t prnt, void
   return CMDSTATUS_FOUND;
 }
 
-static void customNetForPerf()
-{
-  int res = 0;
-  char sysctlmem[256];
-  memset(sysctlmem, 0, 256);
-  sprintf(sysctlmem, "/sbin/sysctl -n -e -q -w net.core.rmem_default=%d", SYSCTL_MEM_VALUE);
-  LOG_W(HW, "running command \"%s\" to increase RFsim performance\n", sysctlmem);
-  res = system(sysctlmem);
-  if (res != 0) {
-    LOG_W(HW, "Cannot set net.core.rmem_default to %d\n", SYSCTL_MEM_VALUE);
-  }
-  memset(sysctlmem, 0, 256);
-  sprintf(sysctlmem, "/sbin/sysctl -n -e -q -w net.core.rmem_max=%d", SYSCTL_MEM_VALUE);
-  LOG_W(HW, "running command \"%s\" to increase RFsim performance\n", sysctlmem);
-  res = system(sysctlmem);
-  if (res != 0) {
-    LOG_W(HW, "Cannot set net.core.rmem_max to %d\n", SYSCTL_MEM_VALUE);
-  }
-  memset(sysctlmem, 0, 256);
-  sprintf(sysctlmem, "/sbin/sysctl -n -e -q -w net.core.wmem_default=%d", SYSCTL_MEM_VALUE);
-  LOG_W(HW, "running command \"%s\" to increase RFsim performance\n", sysctlmem);
-  res = system(sysctlmem);
-  if (res != 0) {
-    LOG_W(HW, "Cannot set net.core.wmem_default to %d\n", SYSCTL_MEM_VALUE);
-  }
-  memset(sysctlmem, 0, 256);
-  sprintf(sysctlmem, "/sbin/sysctl -n -e -q -w net.core.wmem_max=%d", SYSCTL_MEM_VALUE);
-  LOG_W(HW, "running command \"%s\" to increase RFsim performance\n", sysctlmem);
-  res = system(sysctlmem);
-  if (res != 0) {
-    LOG_W(HW, "Cannot set net.core.wmem_max to %d\n", SYSCTL_MEM_VALUE);
-  }
-}
+/* Remove Linux-specific tuning */
+// static void customNetForPerf()
+// {
+//   int res = 0;
+//   char sysctlmem[256];
+//   memset(sysctlmem, 0, 256);
+//   sprintf(sysctlmem, "/sbin/sysctl -n -e -q -w net.core.rmem_default=%d", SYSCTL_MEM_VALUE);
+//   LOG_W(HW, "running command \"%s\" to increase RFsim performance\n", sysctlmem);
+//   res = system(sysctlmem);
+//   if (res != 0) {
+//     LOG_W(HW, "Cannot set net.core.rmem_default to %d\n", SYSCTL_MEM_VALUE);
+//   }
+//   memset(sysctlmem, 0, 256);
+//   sprintf(sysctlmem, "/sbin/sysctl -n -e -q -w net.core.rmem_max=%d", SYSCTL_MEM_VALUE);
+//   LOG_W(HW, "running command \"%s\" to increase RFsim performance\n", sysctlmem);
+//   res = system(sysctlmem);
+//   if (res != 0) {
+//     LOG_W(HW, "Cannot set net.core.rmem_max to %d\n", SYSCTL_MEM_VALUE);
+//   }
+//   memset(sysctlmem, 0, 256);
+//   sprintf(sysctlmem, "/sbin/sysctl -n -e -q -w net.core.wmem_default=%d", SYSCTL_MEM_VALUE);
+//   LOG_W(HW, "running command \"%s\" to increase RFsim performance\n", sysctlmem);
+//   res = system(sysctlmem);
+//   if (res != 0) {
+//     LOG_W(HW, "Cannot set net.core.wmem_default to %d\n", SYSCTL_MEM_VALUE);
+//   }
+//   memset(sysctlmem, 0, 256);
+//   sprintf(sysctlmem, "/sbin/sysctl -n -e -q -w net.core.wmem_max=%d", SYSCTL_MEM_VALUE);
+//   LOG_W(HW, "running command \"%s\" to increase RFsim performance\n", sysctlmem);
+//   res = system(sysctlmem);
+//   if (res != 0) {
+//     LOG_W(HW, "Cannot set net.core.wmem_max to %d\n", SYSCTL_MEM_VALUE);
+//   }
+// }
 
 static int startServer(openair0_device *device) {
   rfsimulator_state_t *t = (rfsimulator_state_t *) device->priv;
@@ -650,7 +652,8 @@ static int startServer(openair0_device *device) {
     return -1;
   }
   struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(t->port), .sin_addr = {.s_addr = INADDR_ANY}};
-  customNetForPerf();
+  /* The following command is useless since it's Linux-specific */
+  // customNetForPerf();
   int rc = bind(t->listen_sock, (struct sockaddr *)&addr, sizeof(addr));
   if (rc < 0) {
     LOG_E(HW, "bind() failed, errno(%d)\n", errno);
@@ -682,7 +685,8 @@ static int startClient(openair0_device *device) {
   addr.sin_addr.s_addr = inet_addr(t->ip);
   bool connected=false;
 
-  customNetForPerf();
+  /* The following command is useless since it's Linux-specific */
+  // customNetForPerf();
   while(!connected) {
     LOG_I(HW, "Trying to connect to %s:%d\n", t->ip, t->port);
 

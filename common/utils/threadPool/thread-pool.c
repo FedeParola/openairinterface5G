@@ -105,6 +105,7 @@ void *one_thread(void *arg) {
 }
 
 void initNamedTpool(char *params,tpool_t *pool, bool performanceMeas, char *name) {
+  printf("Initializing thread pool with params '%s'\n", params);
   memset(pool,0,sizeof(*pool));
   char *measr=getenv("OAI_THREADPOOLMEASUREMENTS");
   pool->measurePerf=performanceMeas;

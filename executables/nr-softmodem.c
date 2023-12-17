@@ -621,14 +621,14 @@ static void initialize_agent(ngran_node_t node_type, e2_agent_args_t oai_args)
 configmodule_interface_t *uniqCfg = NULL;
 int main( int argc, char **argv ) {
   int ru_id, CC_id = 0;
-  start_background_system();
+  // start_background_system();
 
   ///static configuration for NR at the moment
   if ((uniqCfg = load_configmodule(argc, argv, CONFIG_ENABLECMDLINEONLY)) == NULL) {
     exit_fun("[SOFTMODEM] Error, configuration module init failed\n");
   }
 
-  set_softmodem_sighandler();
+  // set_softmodem_sighandler();
 #ifdef DEBUG_CONSOLE
   setvbuf(stdout, NULL, _IONBF, 0);
   setvbuf(stderr, NULL, _IONBF, 0);
@@ -637,7 +637,7 @@ int main( int argc, char **argv ) {
   memset(&openair0_cfg[0],0,sizeof(openair0_config_t)*MAX_CARDS);
   memset(tx_max_power,0,sizeof(int)*MAX_NUM_CCs);
   logInit();
-  set_latency_target();
+  // set_latency_target();
   printf("Reading in command-line options\n");
   get_options(uniqCfg);
 

@@ -112,6 +112,8 @@ typedef struct {
   uint8_t R: 2;       // octet 1 [7:6]
 } __attribute__ ((__packed__)) NR_MAC_SUBHEADER_FIXED;
 
+extern uint16_t ntohs (uint16_t __netshort);
+
 static inline int get_mac_len(uint8_t* pdu, int pdu_len, uint16_t *mac_ce_len, uint16_t *mac_subheader_len) {
   if ( pdu_len < (int)sizeof(NR_MAC_SUBHEADER_SHORT))
     return false;

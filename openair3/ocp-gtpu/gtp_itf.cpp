@@ -511,7 +511,8 @@ static  int udpServerSocket(openAddr_s addr) {
   freeaddrinfo(servinfo); // all done with this structure
 
   int sendbuff = 1000*1000*10;
-  AssertFatal(0==setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &sendbuff, sizeof(sendbuff)),"");
+  /* Socket option not supported by lwip */
+  // AssertFatal(0==setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &sendbuff, sizeof(sendbuff)),"");
   LOG_D(GTPU,"[%d] Created listener for paquets to: %s:%s, send buffer size: %d\n", sockfd, addr.originHost, addr.originService,sendbuff);
   return sockfd;
 }

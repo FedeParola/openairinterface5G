@@ -355,6 +355,7 @@ sctp_handle_new_association_req_multi(
 }
 
 //------------------------------------------------------------------------------
+__attribute__((unused))
 static void
 sctp_handle_new_association_req(
     const instance_t instance,
@@ -616,8 +617,184 @@ sctp_handle_new_association_req(
                sd, sctp_nb_cnx, assoc_id);
 }
 
+/* This function emulates the behavior of sctp_handle_new_association_req()
+ * using tcp as transport
+ */
+static void
+tcp_handle_new_association_req(
+    const instance_t instance,
+    const task_id_t requestor,
+    const sctp_new_association_req_t * const sctp_new_association_req_p)
+{
+    int                sd = 0;
+    sctp_assoc_t assoc_id = 0;
+
+    struct sctp_cnx_list_elm_s   *sctp_cnx = NULL;
+    enum sctp_connection_type_e   connection_type = SCTP_TYPE_CLIENT;
+
+    int notify = 0;
+
+    /* Prepare a new SCTP association as requested by upper layer and try to
+     * connect to remote host.
+     */
+    DevAssert(sctp_new_association_req_p != NULL);
+
+    /* Create new socket with IPv6 affinity */
+    if ((sd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
+        SCTP_ERROR("Socket creation failed: %s\n", strerror(errno));
+        return;
+    }
+
+    /* No support for getifaddrs() in Unikraft, we bind to INADDR_ANY only if it
+     * is a listening socket
+     */
+
+    /* SOCK_STREAM socket type requires an explicit connect to the remote host
+     * address and port.
+     * Only use IPv4 for the first connection attempt
+     */
+    if (sctp_new_association_req_p->remote_address.ipv6 != 0) {
+        SCTP_ERROR("ipv6 not supported\n");
+        close(sd);
+        return;
+    }
+
+    if (sctp_new_association_req_p->remote_address.ipv4 != 0) {
+        struct sockaddr_in addr;
+        addr.sin_family = AF_INET;
+        addr.sin_port   = htons(sctp_new_association_req_p->port);
+        if (inet_pton(AF_INET,
+                      sctp_new_association_req_p->remote_address.ipv4_address,
+                      &addr.sin_addr.s_addr) != 1) {
+            SCTP_ERROR("Failed to convert ipv4 address %s to network type\n",
+                       sctp_new_association_req_p->remote_address.ipv4_address);
+            close(sd);
+            return;
+        }
+
+        printf("SCTP emulation: Connecting to %s:%d\n",
+               sctp_new_association_req_p->remote_address.ipv4_address,
+               sctp_new_association_req_p->port);
+
+        /* Connect to remote host and port. Handle the connection synchronously
+         * for now and immediately notify success
+         */
+        if (connect(sd, (struct sockaddr *)&addr, sizeof(addr))) {
+            SCTP_ERROR("Connect failed: %s\n", strerror(errno));
+            sctp_itti_send_association_resp(
+                requestor, instance, -1,
+                sctp_new_association_req_p->ulp_cnx_id,
+                SCTP_STATE_UNREACHABLE, 0, 0);
+            /* Remove the socket to list of fd monitored by ITTI */
+            close(sd);
+            return;
+        }
+        
+        SCTP_DEBUG("connect SUCCESS, assoc_id %d\n", assoc_id);
+        notify = 1;
+
+    } else {
+        /* No remote address provided -> only bind the socket for now.
+         * Connection will be accepted in the main event loop
+         */
+        struct sockaddr_in addr;
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(sctp_new_association_req_p->port);
+        addr.sin_addr.s_addr = INADDR_ANY;
+
+        if (bind(sd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+            SCTP_ERROR("Failed to bind the socket to address any (v4/v6): %s\n",
+                       strerror(errno));
+            close(sd);
+            return;
+        }
+    }
+
+    /* Mark the socket as non-blocking */
+    if (fcntl(sd, F_SETFL, O_NONBLOCK) < 0) {
+        SCTP_ERROR("fcntl F_SETFL O_NONBLOCK failed: %s\n",
+                   strerror(errno));
+        close(sd);
+        return;
+    }
+
+    /* Add the socket to list of fd monitored by ITTI */
+    itti_subscribe_event_fd(TASK_SCTP, sd);
+
+    sctp_cnx = calloc(1, sizeof(*sctp_cnx));
+
+    sctp_cnx->connection_type = connection_type;
+
+    sctp_cnx->sd          = sd;
+    sctp_cnx->task_id     = requestor;
+    sctp_cnx->cnx_id      = sctp_new_association_req_p->ulp_cnx_id;
+    sctp_cnx->ppid        = sctp_new_association_req_p->ppid;
+    sctp_cnx->instance    = instance;
+    sctp_cnx->assoc_id    = assoc_id;
+    sctp_cnx->out_streams = 1;
+    sctp_cnx->in_streams  = 1;
+
+    /* Insert new element at end of list */
+    STAILQ_INSERT_TAIL(&sctp_cnx_list, sctp_cnx, entries);
+    sctp_nb_cnx++;
+
+    if (notify) {
+        sctp_itti_send_association_resp(sctp_cnx->task_id, sctp_cnx->instance,
+                                        sctp_cnx->assoc_id, sctp_cnx->cnx_id,
+                                        SCTP_STATE_ESTABLISHED,
+                                        sctp_cnx->out_streams,
+                                        sctp_cnx->in_streams);
+    }
+
+    SCTP_DEBUG("Inserted new descriptor for sd %d in list, nb elements %u, "
+               "assoc_id %d\n", sd, sctp_nb_cnx, assoc_id);
+}
+
 //------------------------------------------------------------------------------
+__attribute__((unused))
 static void sctp_send_data(sctp_data_req_t *sctp_data_req_p)
+{
+    struct sctp_cnx_list_elm_s *sctp_cnx = NULL;
+
+    DevAssert(sctp_data_req_p != NULL);
+    DevAssert(sctp_data_req_p->buffer != NULL);
+    DevAssert(sctp_data_req_p->buffer_length > 0);
+
+    sctp_cnx = sctp_get_cnx(sctp_data_req_p->assoc_id, 0);
+
+    if (sctp_cnx == NULL) {
+        SCTP_ERROR("Failed to find SCTP description for assoc_id %d\n",
+                   sctp_data_req_p->assoc_id);
+        /* TODO: notify upper layer */
+        return;
+    }
+
+    if (sctp_data_req_p->stream >= sctp_cnx->out_streams) {
+        SCTP_ERROR("Requested stream (%"PRIu16") >= nb out streams (%"PRIu16")\n",
+                   sctp_data_req_p->stream, sctp_cnx->out_streams);
+        return;
+    }
+
+    /* Send message on specified stream of the sd association
+     * NOTE: PPID should be defined in network order
+     */
+    if (sctp_sendmsg(sctp_cnx->sd, sctp_data_req_p->buffer,
+                     sctp_data_req_p->buffer_length, NULL, 0,
+                     htonl(sctp_cnx->ppid), 0, sctp_data_req_p->stream, 0, 0) < 0) {
+        SCTP_ERROR("Sctp_sendmsg failed: %s\n", strerror(errno));
+        /* TODO: notify upper layer */
+        return;
+    }
+    free(sctp_data_req_p->buffer); // assuming it has been malloced
+    SCTP_DEBUG("Successfully sent %u bytes on stream %d for assoc_id %d\n",
+               sctp_data_req_p->buffer_length, sctp_data_req_p->stream,
+               sctp_cnx->assoc_id);
+}
+
+/* This function emulates the behavior of sctp_send_data() using tcp as
+ * transport
+ */
+static void tcp_send_data(sctp_data_req_t *sctp_data_req_p)
 {
     struct sctp_cnx_list_elm_s *sctp_cnx = NULL;
 
@@ -914,6 +1091,7 @@ sctp_eNB_accept_associations(
 }
 
 //------------------------------------------------------------------------------
+__attribute__((unused))
 static inline
 void
 sctp_eNB_read_from_socket(
@@ -1050,6 +1228,80 @@ sctp_eNB_read_from_socket(
     }
 }
 
+/* This function emulates the behavior of sctp_eNB_read_from_socket()
+ * using tcp as transport
+ */
+static inline void
+tcp_eNB_read_from_socket(struct sctp_cnx_list_elm_s *sctp_cnx)
+{
+    DevAssert(sctp_cnx != NULL);
+
+    struct sctp_sndrcvinfo sinfo={0};
+    uint8_t buffer[SCTP_RECV_BUFFER_SIZE];
+
+    int n = recv(sctp_cnx->sd, &buffer, SCTP_RECV_BUFFER_SIZE, 0);
+
+    if (n < 0) {
+        if (errno == ENOTCONN || errno == ECONNRESET || errno == ETIMEDOUT
+            || errno == ECONNREFUSED) {
+            itti_unsubscribe_event_fd(TASK_SCTP, sctp_cnx->sd);
+
+            SCTP_DEBUG("Received not connected for sd %d\n", sctp_cnx->sd);
+            SCTP_ERROR("recv (fd %d, len %d ): %s:%d\n", sctp_cnx->sd, n,
+                       strerror(errno), errno);
+
+            sctp_itti_send_association_resp(
+                sctp_cnx->task_id, sctp_cnx->instance, -1,
+                sctp_cnx->cnx_id, SCTP_STATE_UNREACHABLE, 0, 0);
+
+            close(sctp_cnx->sd);
+            STAILQ_REMOVE(&sctp_cnx_list, sctp_cnx, sctp_cnx_list_elm_s,
+                          entries);
+            sctp_nb_cnx--;
+            free(sctp_cnx);
+        } else {
+            SCTP_DEBUG("An error occured during read\n");
+            SCTP_ERROR("recv (fd %d, len %d ): %s:%d\n", sctp_cnx->sd, n,
+                       strerror(errno), errno);
+        }
+
+        return;
+
+    } else if (n == 0) {
+        /* Peer closed the connection */
+        itti_unsubscribe_event_fd(TASK_SCTP, sctp_cnx->sd);
+
+        SCTP_WARN("Emulated SCTP connection closed\n");
+        close(sctp_cnx->sd);
+
+        sctp_itti_send_association_resp(
+            sctp_cnx->task_id, sctp_cnx->instance, sctp_cnx->assoc_id,
+            sctp_cnx->cnx_id, SCTP_STATE_SHUTDOWN,
+            0, 0);
+
+        STAILQ_REMOVE(&sctp_cnx_list, sctp_cnx, sctp_cnx_list_elm_s,
+                        entries);
+        sctp_nb_cnx--;
+
+        free(sctp_cnx);
+
+        return;
+    }
+
+    sctp_cnx->messages_recv++;
+
+    SCTP_DEBUG("[%d][%d] Msg of length %d received, on stream %d, PPID %d\n",
+                sinfo.sinfo_assoc_id, sctp_cnx->sd, n, 
+                sinfo.sinfo_stream, ntohl(sinfo.sinfo_ppid));
+
+    sctp_itti_send_new_message_ind(sctp_cnx->task_id,
+                                   sctp_cnx->instance,
+                                   sinfo.sinfo_assoc_id,
+                                   buffer,
+                                   n,
+                                   sinfo.sinfo_stream);
+}
+
 //------------------------------------------------------------------------------
 void
 static sctp_eNB_flush_sockets(
@@ -1068,7 +1320,7 @@ static sctp_eNB_flush_sockets(
         SCTP_DEBUG("Found data for descriptor %d\n", events[i].data.fd);
 
         if (sctp_cnx->connection_type == SCTP_TYPE_CLIENT) {
-            sctp_eNB_read_from_socket(sctp_cnx);
+            tcp_eNB_read_from_socket(sctp_cnx);
         }
         else if (sctp_cnx->connection_type == SCTP_TYPE_MULTI_SERVER) {
             sctp_eNB_accept_associations_multi(sctp_cnx);
@@ -1132,9 +1384,9 @@ static void sctp_eNB_process_itti_msg()
         break;
 
         case SCTP_NEW_ASSOCIATION_REQ: {
-            sctp_handle_new_association_req(ITTI_MSG_DESTINATION_INSTANCE(received_msg),
-                                            ITTI_MSG_ORIGIN_ID(received_msg),
-                                            &received_msg->ittiMsg.sctp_new_association_req);
+            tcp_handle_new_association_req(ITTI_MSG_DESTINATION_INSTANCE(received_msg),
+                                           ITTI_MSG_ORIGIN_ID(received_msg),
+                                           &received_msg->ittiMsg.sctp_new_association_req);
         }
         break;
 
@@ -1155,7 +1407,7 @@ static void sctp_eNB_process_itti_msg()
             break;
 
         case SCTP_DATA_REQ: {
-          sctp_send_data(&received_msg->ittiMsg.sctp_data_req);
+          tcp_send_data(&received_msg->ittiMsg.sctp_data_req);
         }
         break;
 

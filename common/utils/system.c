@@ -228,7 +228,8 @@ int rt_sleep_ns (uint64_t x)
 void threadCreate(pthread_t* t, void * (*func)(void*), void * param, char* name, int affinity, int priority){
   pthread_attr_t attr;
   int ret;
-  int settingPriority = 1;
+  /* Setting priority not supported by Unikraft */
+  int settingPriority = 0;
   ret=pthread_attr_init(&attr);
   AssertFatal(ret==0,"ret: %d, errno: %d\n",ret, errno);
 
